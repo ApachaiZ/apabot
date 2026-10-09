@@ -1,0 +1,25 @@
+# ── Build ──
+/target/
+
+# ── Secrets & état runtime (jamais commités) ──
+.config.d/.env
+.config.d/active.lock
+.config.d/active.lock.tmp
+.config.d/commands.hash
+.config.d/members.state.json
+.config.d/members.roster.json
+.config.d/stats.json
+.config.d/sessions.json
+.config.d/sessions.json.tmp
+.config.d/users.json
+.config.d/users.json.tmp
+# ── Hérité de l'ancienne organisation (transition) ──
+.apach/
+apach-users.json
+
+# ── Logs ──
+*.log
+logs/
+.aider*
+# ── Outillage ──
+.codewhale/

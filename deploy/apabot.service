@@ -1,0 +1,44 @@
+[Unit]
+# Exemple d'unité système. Préférez `apabot systemd install` : la commande
+# génère la MÊME unité avec les chemins réels de votre installation (binaire,
+# répertoire, .env) et demande confirmation à chaque étape.
+Description=apabot — Discord game server control bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=apabot
+Group=apabot
+WorkingDirectory=/opt/apabot
+
+# systemd injecte directement les variables du fichier .env.
+# Format KEY=VALUE, compatible avec le chargeur .env du bot.
+EnvironmentFile=/opt/apabot/.config.d/.env
+
+# Binaire unique (cargo build --release).
+ExecStart=/opt/apabot/target/release/apabot run --non-interactive
+
+Restart=on-failure
+RestartSec=5s
+
+# Logs vers journald (le bot écrit en parallèle dans logs/apabot.log)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=apabot
+
+# Durcissement
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# Préfixe "-" : systemd tolère l'absence du chemin au chargement (premier boot).
+ReadWritePaths=-/opt/apabot/.config.d -/opt/apabot/logs
+
+[Install]
+WantedBy=multi-user.target

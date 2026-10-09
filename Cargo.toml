@@ -1,0 +1,94 @@
+[package]
+name = "apabot"
+version = "2.0.0"
+edition = "2021"
+description = "Bot Discord 100 % privé pour piloter et surveiller des serveurs de jeu distants"
+license = "MIT"
+
+# ── Profil release : le déploiement passe par `cargo build --release`.
+#    `opt-level = 3` est le défaut de release ; on l'explicite pour le cours,
+#    et on garde `debug` (symboles) — un binaire de bot reste petit (< 15 Mo).
+#    `strip` est laissé désactivé : les backtraces de panique restent lisibles
+#    dans le fichier de log partagé superviseur/systemd (précieux en production).
+[profile.release]
+opt-level = 3
+lto = "thin"     # "Link-Time Optimization" léger : meilleures perfs, compile vite.
+codegen-units = 1
+# Pas de `panic = "abort"` : poise CONTIENT les panics des commandes
+# (catch_unwind), comme le `uncaughtException` du JS — un bug dans UNE
+# commande tue sa tâche et affiche une carte d'erreur, il ne fait PAS
+# tomber le bot entier (l'abort le ferait, et rendrait le catch inopérant).
+# Les panics sont journalisés par le hook de `main.rs` quoi qu'il arrive.
+
+[dependencies]
+# ── Runtime asynchrone ─────────────────────────────────────────────────────
+# Features RÉDUITES au strict nécessaire (pas de `full`) : binaire plus
+# petit, compilation plus courte. Un bot est I/O-bound — Discord, HTTP,
+# canal de contrôle — `rt-multi-thread` reste là pour la robustesse mais
+# le nombre de workers est limité à 2 dans `main.rs` (chaque worker = pile
+# + état runtime ; 2 suffisent largement).
+tokio = { version = "1", features = [
+    "rt-multi-thread", # exécuteur
+    "macros",          # tokio::main, tokio::select!
+    "net",             # canal de contrôle TCP du superviseur
+    "time",            # sleep, timeout, backoff
+    "signal",          # SIGTERM/SIGINT du bot et du superviseur
+    "sync",            # mpsc, watch, OnceCell, Mutex
+    "process",         # enfant du superviseur (tokio::process)
+    "io-util",         # AsyncReadExt/AsyncWriteExt (pipes, canal)
+] }
+
+# ── Discord ────────────────────────────────────────────────────────────────
+# poise = framework de slash-commands construit sur serenity (l'équivalent
+# Rust de discord.js). `poise::serenity_prelude` ré-exporte serenity : nous
+# n'ajoutons donc serenity qu'au travers de poise.
+poise = "0.6"
+
+# ── HTTP (providers) ───────────────────────────────────────────────────────
+# reqwest remplace axios. `rustls-tls` = TLS pur Rust (pas d'OpenSSL système),
+# `json` = sérialisation serde_json automatique.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+# ── Données & sérialisation ────────────────────────────────────────────────
+# serde : l'équivalent de JSON.stringify/parse, mais typé à la compilation.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"          # encodage de query strings (signature OVH)
+
+# ── Crypto (parité exacte avec crypto.js) ──────────────────────────────────
+aes-gcm = "0.10"   # AES-256-GCM (chiffrement des fichiers d'état)
+sha2 = "0.10"      # SHA-256 (dérivation de clé depuis le token)
+sha1 = "0.10"      # SHA-1 (signature OVH — imposé par l'API OVH)
+rand = "0.8"       # IV aléatoires (OsRng = /dev/urandom)
+base64 = "0.22"    # encodage base64 du blob chiffré (format JS identique)
+
+# ── Configuration & outils ─────────────────────────────────────────────────
+dotenvy = "0.15"          # équivalent de dotenv : lit .apach/.env
+unicode-width = "0.2"     # largeur visuelle des emojis (bannière alignée)
+dialoguer = "0.11"        # prompts interactifs du setup (remplace readline)
+chrono = { version = "0.4", default-features = false, features = ["clock"] }  # horodatage des logs
+futures = "0.3"           # StreamExt (collecteurs de boutons Discord)
+
+# ── Gestion d'erreurs ──────────────────────────────────────────────────────
+# anyhow  : erreur "boîte noire" ergonomique (équivalent d'un try/catch global).
+# thiserror : erreurs typées maison (ConfigError → exit code 78).
+anyhow = "1"
+thiserror = "2"
+
+# ── Mission control (TUI + daemon embarqué) ────────────────────────────────
+# ratatui + crossterm : le TUI de pilotage (`mission-control`) — terminal
+# ANSI cross-platform (Windows/macOS/Linux), piloté au clavier.
+ratatui = "0.29"
+crossterm = "0.28"
+
+[dev-dependencies]
+# Pas de dépendance de test supplémentaire : la suite utilise le testeur
+# intégré de Cargo (`cargo test`) et ne touche ni réseau ni fichiers hors
+# d'un dossier temporaire.
+
+# ── Détachement du superviseur (Unix seulement) ─────────────────────────────
+# setsid (spawn détaché du terminal) et kill(pid, 0) (détection d'état
+# obsolète). Sous Windows, ces rôles sont tenus par les `creation flags` et
+# `tasklist` (std, sans dépendance).
+[target."cfg(unix)".dependencies]
+libc = "0.2"
