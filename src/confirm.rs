@@ -120,9 +120,10 @@ pub async fn confirm(ctx: &Context<'_>, embed: CreateEmbed) -> Result<(MessageId
                 Ok((msg.id, false))
             } else {
                 let c = catalog.confirm.processing;
-                // Le GIF `loading` arrive ICI, dès le clic : l'utilisateur
-                // le voit pendant toute l'attente (lecture d'état fraîche,
-                // POST power…), pas seulement pendant la transmission.
+                // Le GIF `loading` (tiré au hasard dans le pool) arrive ICI,
+                // dès le clic : l'utilisateur le voit pendant toute l'attente
+                // (lecture d'état fraîche, POST power…), pas seulement pendant
+                // la transmission.
                 let loading = assets::gif_image("loading");
                 let mut embed = card(c.title, c.body, Tone::Wait, None);
                 let mut builder = clean;

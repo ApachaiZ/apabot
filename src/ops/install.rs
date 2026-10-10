@@ -511,7 +511,13 @@ fn install_files(root: &Path, bin: &Path, pointer: bool, catalog: &Catalog) -> R
     // GIFs (requis par /start /stop /status) : copiés depuis le checkout
     // source s'il existe, sinon matérialisés depuis les octets EMBARQUÉS
     // (installation via `cargo install --git`, sans checkout à côté).
-    for kind in ["loading", "waiting", "success", "error"] {
+    // Les états de chargement tirent au hasard dans le pool des loaders :
+    // TOUS les membres du pool doivent être présents.
+    let kinds = crate::assets::LOADING_KINDS
+        .iter()
+        .copied()
+        .chain(["success", "error"]);
+    for kind in kinds {
         let target = root.join("assets").join("emojis").join(format!("{kind}.gif"));
         if target.exists() {
             continue;
