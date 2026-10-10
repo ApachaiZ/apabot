@@ -23,11 +23,12 @@ pub struct Gif {
     pub image_url: Option<String>,
 }
 
-/// Les GIFs de chargement disponibles : `loading` + variantes `loading1..6`.
-/// Chaque état de chargement ou d'attente tire l'un d'eux AU HASARD, pour
-/// que l'utilisateur ne voie pas toujours le même loader.
-pub const LOADING_KINDS: [&str; 7] = [
-    "loading", "loading1", "loading2", "loading3", "loading4", "loading5", "loading6",
+/// Les GIFs de chargement disponibles : `loading` + variantes `loading1..6`
+/// (sans `loading3`, retiré). Chaque état de chargement ou d'attente tire
+/// l'un d'eux AU HASARD, pour que l'utilisateur ne voie pas toujours le
+/// même loader.
+pub const LOADING_KINDS: [&str; 6] = [
+    "loading", "loading1", "loading2", "loading4", "loading5", "loading6",
 ];
 
 /// Tire un GIF de chargement au hasard dans [`LOADING_KINDS`].
@@ -38,15 +39,14 @@ pub fn random_loading_kind() -> &'static str {
         .unwrap_or("loading")
 }
 
-/// Octets embarqués d'un GIF (`loading` | `loading1..6` | `success` |
-/// `error`), `None` pour tout autre nom. ~9 Mo au total — acceptable face
-/// au binaire (~23 Mo).
+/// Octets embarqués d'un GIF (`loading` | `loading1..6` sauf `loading3` |
+/// `success` | `error`), `None` pour tout autre nom. ~10 Mo au total —
+/// acceptable face au binaire (~24 Mo).
 pub fn embedded(kind: &str) -> Option<&'static [u8]> {
     match kind {
         "loading" => Some(include_bytes!("../assets/emojis/loading.gif")),
         "loading1" => Some(include_bytes!("../assets/emojis/loading1.gif")),
         "loading2" => Some(include_bytes!("../assets/emojis/loading2.gif")),
-        "loading3" => Some(include_bytes!("../assets/emojis/loading3.gif")),
         "loading4" => Some(include_bytes!("../assets/emojis/loading4.gif")),
         "loading5" => Some(include_bytes!("../assets/emojis/loading5.gif")),
         "loading6" => Some(include_bytes!("../assets/emojis/loading6.gif")),
@@ -102,6 +102,9 @@ mod tests {
         // `waiting` reste un état valide (`gif_image`), mais n'a plus
         // d'octets propres : il tire dans le pool des loaders.
         assert!(embedded("waiting").is_none());
+        // `loading3` a été retiré du pool (visuel instable).
+        assert!(embedded("loading3").is_none());
+        assert!(!LOADING_KINDS.contains(&"loading3"));
     }
 
     #[test]

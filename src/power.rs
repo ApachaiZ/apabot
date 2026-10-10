@@ -56,6 +56,13 @@ const POLL_DELAYS: [Duration; 11] = [
 /// Suivi maximal d'une action avant de déclarer la fin non confirmée.
 const TRACKING_TIMEOUT: Duration = Duration::from_secs(600);
 
+/// Budget ABSOLU d'une action power, compté depuis la CONFIRMATION (soit
+/// l'invocation + ≤ 60 s de confirmation) : le token de l'interaction
+/// Discord expire 15 min après la commande — TOUTES les éditions de la
+/// carte doivent avoir eu lieu avant. 12 min laissent ~2-3 min de marge
+/// même quand chaque lecture provider traîne jusqu'à son timeout.
+const FLOW_BUDGET: Duration = Duration::from_secs(720);
+
 /// Au-delà de 5 échecs de lecture consécutifs, on abandonne le suivi.
 const MAX_FAILURES: u32 = 5;
 
@@ -157,18 +164,30 @@ fn reached(action: Action, current: &crate::providers::Status, before: &crate::p
 
 /// Vérification ponctuelle après un échec de transmission : jusqu'à 3
 /// lectures espacées du premier délai de backoff, SANS aucune nouvelle
-/// requête power. Retourne l'état si l'objectif est atteint.
+/// requête power. Retourne l'état si l'objectif est atteint. Chaque
+/// lecture est bornée par `deadline` (le token d'interaction meurt à
+/// 15 min : on ne vérifie jamais au-delà).
 async fn verify_target_state(
     data: &Data,
     service_id: &str,
     action: Action,
     before: &crate::providers::Status,
+    deadline: Instant,
 ) -> Option<crate::providers::Status> {
     for attempt in 0..3 {
         if attempt > 0 {
-            tokio::time::sleep(POLL_DELAYS[0]).await;
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            tokio::time::sleep(remaining.min(POLL_DELAYS[0])).await;
         }
-        if let Ok(current) = data.api.get(service_id, true).await {
+        if Instant::now() >= deadline {
+            return None;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let read = tokio::time::timeout(remaining, data.api.get(service_id, true)).await;
+        if let Ok(Ok(current)) = read {
             if reached(action, &current, before, false, true) {
                 return Some(current);
             }
@@ -253,9 +272,12 @@ pub async fn power(ctx: Context<'_>, action: Action, service_alias: Option<Strin
     // ── Verrou posé : l'action est lancée ──
     data.state.write_lock(&alias, action.as_str());
     let action_start = Instant::now();
+    // Budget absolu du flux (voir [`FLOW_BUDGET`]) : toutes les éditions
+    // de la carte doivent tomber avant l'expiration du token Discord.
+    let flow_deadline = action_start + FLOW_BUDGET;
 
     // Le `finally` du JS : relâchement + délai de grâce, quoi qu'il arrive.
-    let result = run_action(&ctx, track_msg, action, &alias, &service_id, action_start).await;
+    let result = run_action(&ctx, track_msg, action, &alias, &service_id, action_start, flow_deadline).await;
     data.state.record_lock_release(&alias);
     data.state.clear_lock(&alias);
     result
@@ -264,7 +286,8 @@ pub async fn power(ctx: Context<'_>, action: Action, service_alias: Option<Strin
 /// Cœur de l'action (après verrouillage). `track_msg` identifie la carte de
 /// confirmation (la réponse originale) : toutes les étapes suivantes
 /// l'ÉDITENT via le token d'interaction — aucun nouveau message,
-/// 100 % éphémère comme le JS.
+/// 100 % éphémère comme le JS. `flow_deadline` est le budget absolu :
+/// au-delà, le token d'interaction expire et plus aucune édition ne passe.
 async fn run_action(
     ctx: &Context<'_>,
     track_msg: MessageId,
@@ -272,6 +295,7 @@ async fn run_action(
     alias: &str,
     service_id: &str,
     action_start: Instant,
+    flow_deadline: Instant,
 ) -> Result<(), Error> {
     let data = ctx.data();
     let catalog = data.catalog;
@@ -334,7 +358,7 @@ async fn run_action(
         }
         // L'action a PU être transmise (timeout, 5xx après exécution…) :
         // vérification rapide de l'état réel — uniquement des LECTURES.
-        if let Some(confirmed) = verify_target_state(data, service_id, action, &before).await {
+        if let Some(confirmed) = verify_target_state(data, service_id, action, &before, flow_deadline).await {
             logger::info(fill(
                 catalog.audit.power_applied_despite_error,
                 &[
@@ -422,13 +446,24 @@ async fn run_action(
     let mut collector_done = false;
 
     'tracking: while start.elapsed() < TRACKING_TIMEOUT {
+        // Garde de budget : plus AUCUNE édition ne passerait après
+        // l'expiration du token d'interaction.
+        if Instant::now() >= flow_deadline {
+            break 'tracking;
+        }
         let delay = POLL_DELAYS[iteration.min(POLL_DELAYS.len() - 1)];
         iteration += 1;
 
         // Course entre le sommeil et le clic d'annulation : le premier des
         // deux futurs prêts gagne (équivalent du Promise.race du JS).
+        // Le sommeil s'arrête au plus tard à la deadline du flux.
+        let remaining = flow_deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break 'tracking;
+        }
+        let wake = remaining.min(delay);
         if collector_done {
-            tokio::time::sleep(delay).await;
+            tokio::time::sleep(wake).await;
         } else {
             tokio::select! {
                 click = collector.next() => {
@@ -446,8 +481,13 @@ async fn run_action(
                         }
                     }
                 }
-                _ = tokio::time::sleep(delay) => {}
+                _ = tokio::time::sleep(wake) => {}
             }
+        }
+        // Re-vérification après le réveil : un poll lancé à la deadline
+        // ne doit pas retarder la carte finale au-delà du token.
+        if Instant::now() >= flow_deadline {
+            break 'tracking;
         }
 
         // ── Un tour de polling ──
