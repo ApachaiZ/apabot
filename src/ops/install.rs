@@ -331,6 +331,9 @@ fn choose_destination(name: Option<&str>, catalog: &Catalog) -> Option<(PathBuf,
 
 async fn install(args: &[String], catalog: &'static Catalog) -> i32 {
     let dry_run = args.iter().any(|a| a == "--dry-run");
+    // Réinstaller les GIFs de cartes (par défaut, les fichiers existants
+    // sont préservés — personnalisation utilisateur).
+    let refresh_assets = args.iter().any(|a| a == "--refresh-assets");
 
     // ── Instance : --name <nom> (saisi) | --name auto (généré) | défaut ──
     // Chaque instance vit dans SA racine de données : plusieurs bots aux
@@ -416,9 +419,15 @@ async fn install(args: &[String], catalog: &'static Catalog) -> i32 {
         return 0;
     }
 
-    if let Err(e) = install_files(&root, &bin, instance_name.is_none(), catalog) {
+    if let Err(e) = install_files(&root, &bin, instance_name.is_none(), refresh_assets, catalog) {
         eprintln!("{}", fill(catalog.ops.install_failed, &[("error", &e.to_string())]));
         return 1;
+    }
+    if refresh_assets {
+        println!(
+            "{}",
+            fill(catalog.ops.refresh_assets_ok, &[("root", &root.display().to_string())])
+        );
     }
 
     // ── Configuration AU MOMENT de l'installation ──
@@ -496,15 +505,50 @@ async fn install(args: &[String], catalog: &'static Catalog) -> i32 {
     0
 }
 
+/// Matérialise les GIFs de cartes dans `<root>/assets/emojis/` : copiés
+/// depuis le checkout source s'il existe, sinon depuis les octets EMBARQUÉS
+/// (installation via `cargo install --git`, sans checkout à côté).
+///
+/// Sans `refresh`, un GIF existant n'est JAMAIS écrasé (personnalisation
+/// utilisateur préservée) ; avec `refresh`, les GIFs par défaut remplacent
+/// ceux du disque — c'est le chemin de mise à jour après un `git pull`.
+pub fn materialize_gifs(root: &Path, refresh: bool) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(root.join("assets").join("emojis"))?;
+    let kinds = crate::assets::LOADING_KINDS
+        .iter()
+        .copied()
+        .chain(["success", "error"]);
+    for kind in kinds {
+        let _ = materialize_kind(root, kind, refresh);
+    }
+    Ok(())
+}
+
+/// Matérialise UN GIF (voir [`materialize_gifs`] pour la sémantique).
+fn materialize_kind(root: &Path, kind: &str, refresh: bool) -> std::io::Result<()> {
+    let target = root.join("assets").join("emojis").join(format!("{kind}.gif"));
+    if target.exists() && !refresh {
+        return Ok(());
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let source = cwd.join("assets").join("emojis").join(format!("{kind}.gif"));
+    if source.is_file() {
+        std::fs::copy(&source, &target)?;
+    } else if let Some(bytes) = crate::assets::embedded(kind) {
+        std::fs::write(&target, bytes)?;
+    }
+    Ok(())
+}
+
 /// Le gros du travail : structure de données + binaire + registry.
 /// `pointer` = écrire aussi le pointeur par défaut (instance SANS nom
-/// uniquement).
-fn install_files(root: &Path, bin: &Path, pointer: bool, catalog: &Catalog) -> Result<(), std::io::Error> {
+/// uniquement). `refresh_assets` = écraser les GIFs de cartes existants
+/// (par défaut ils sont préservés : personnalisation utilisateur).
+fn install_files(root: &Path, bin: &Path, pointer: bool, refresh_assets: bool, catalog: &Catalog) -> Result<(), std::io::Error> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     std::fs::create_dir_all(root)?;
     std::fs::create_dir_all(root.join("logs"))?;
-    std::fs::create_dir_all(root.join("assets").join("emojis"))?;
     let configd = root.join(".config.d");
     std::fs::create_dir_all(&configd)?;
 
@@ -513,22 +557,7 @@ fn install_files(root: &Path, bin: &Path, pointer: bool, catalog: &Catalog) -> R
     // (installation via `cargo install --git`, sans checkout à côté).
     // Les états de chargement tirent au hasard dans le pool des loaders :
     // TOUS les membres du pool doivent être présents.
-    let kinds = crate::assets::LOADING_KINDS
-        .iter()
-        .copied()
-        .chain(["success", "error"]);
-    for kind in kinds {
-        let target = root.join("assets").join("emojis").join(format!("{kind}.gif"));
-        if target.exists() {
-            continue;
-        }
-        let source = cwd.join("assets").join("emojis").join(format!("{kind}.gif"));
-        if source.is_file() {
-            let _ = std::fs::copy(&source, &target);
-        } else if let Some(bytes) = crate::assets::embedded(kind) {
-            let _ = std::fs::write(&target, bytes);
-        }
-    }
+    materialize_gifs(root, refresh_assets)?;
 
     // Config : .env.example toujours, .env existant copié (secrets inclus —
     // c'est SA configuration). Jamais d'écrasement.
@@ -591,6 +620,9 @@ async fn stop_daemon_if_running(catalog: &Catalog) -> bool {
 
 async fn reinstall(args: &[String], catalog: &'static Catalog) -> i32 {
     let dry_run = args.iter().any(|a| a == "--dry-run");
+    // `--refresh-assets` : réécrire aussi les GIFs de cartes (par défaut,
+    // `reinstall` ne touche JAMAIS aux données).
+    let refresh_assets = args.iter().any(|a| a == "--refresh-assets");
     let name = args
         .iter()
         .position(|a| a == "--name")
@@ -652,6 +684,16 @@ async fn reinstall(args: &[String], catalog: &'static Catalog) -> i32 {
     if let Err(e) = write_registry(&reg.root, &reg.bin, pointer) {
         eprintln!("{}", fill(catalog.ops.install_failed, &[("error", &e.to_string())]));
         return 1;
+    }
+    if refresh_assets {
+        if let Err(e) = materialize_gifs(&reg.root, true) {
+            eprintln!("{}", fill(catalog.ops.install_failed, &[("error", &e.to_string())]));
+            return 1;
+        }
+        println!(
+            "{}",
+            fill(catalog.ops.refresh_assets_ok, &[("root", &reg.root.display().to_string())])
+        );
     }
     println!(
         "{}",
@@ -801,6 +843,26 @@ mod tests {
         assert!(name.starts_with("apabot"));
         assert_eq!(name.len(), 8);
         assert!(name[6..].chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn refresh_assets_overwrites_only_when_asked() {
+        // Sans `refresh`, un GIF existant (personnalisation) est préservé ;
+        // avec `refresh`, le GIF par défaut du checkout/embarqué remplace.
+        let dir = std::env::temp_dir().join(format!("apabot-gifs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let target = dir.join("assets").join("emojis").join("error.gif");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, b"custom").unwrap();
+
+        materialize_kind(&dir, "error", false).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"custom");
+
+        materialize_kind(&dir, "error", true).unwrap();
+        let fresh = std::fs::read(&target).unwrap();
+        assert!(&fresh[..6] == b"GIF89a", "le GIF par défaut n'a pas remplacé la personnalisation");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]

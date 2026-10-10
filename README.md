@@ -163,7 +163,8 @@ src/
 │   ├── spawn.rs       ← lancement détaché cross-platform (setsid / creation flags)
 │   ├── state.rs       ← .config.d/daemon.json (pid, port, jeton) + détection d'obsolescence
 │   ├── tail.rs        ← tail + suivi du log par sondage (cross-platform, rotation-safe)
-│   ├── install.rs     ← install/reinstall/uninstall (défaut OS, destination, --name)
+│   ├── install.rs     ← install/reinstall/uninstall (défaut OS, destination, --name, --refresh-assets)
+│   ├── completions.rs ← scripts d'autocomplétion shell (bash|zsh|fish)
 │   ├── config.rs      ← config interactive + profils
 │   └── systemd.rs     ← `systemd install|remove` optionnel (Linux, confirmations)
 ├── tui.rs             ← mission control TUI (ratatui : état, logs, commandes au clavier)
@@ -269,16 +270,35 @@ apabot install                          # prompts : destination + confirmation
 apabot install --name apabot01          # instance NOMMÉE (config isolée)
 apabot install --name auto              # nom généré (apabot01, apabot02…)
 apabot install --env-file ~/mon.env     # configuration depuis un fichier
+apabot install --refresh-assets         # réécrit aussi les GIFs de cartes
 apabot reinstall --name apabot01        # met à jour un binaire (données intactes)
+apabot reinstall --refresh-assets       # binaire + GIFs de cartes (le reste intact)
 apabot uninstall --name apabot01        # retire une instance (données : NON par défaut)
 apabot install --dry-run                # plan sans rien écrire
 ```
+
+**Mise à jour des GIFs** : un GIF déjà sur disque n'est JAMAIS écrasé
+(personnalisation préservée). Après un `git pull` + rebuild, force le
+rafraîchissement avec `apabot reinstall --refresh-assets` (ou `--refresh-assets`
+dès l'installation) : le pool de chargement + succès + erreur sont réécrits
+depuis le checkout, ou depuis les octets embarqués sans checkout à côté.
 
 **Instances multiples** : `--name` isole COMPLÈTEMENT chaque bot —
 `~/.config/apabot/instances/<nom>/` contient son propre `.config.d/.env`,
 ses logs, ses profils et l'état de son daemon ; le binaire s'appelle
 `apabot-<nom>` et se reconnaît par son nom. Plusieurs instances tournent
 en même temps, chacune avec son daemon et son canal de contrôle.
+
+### Autocomplétion shell
+
+`apabot completions` imprime le script d'autocomplétion pour bash, zsh ou
+fish — généré depuis la liste réelle des sous-commandes.
+
+```bash
+apabot completions bash > ~/.local/share/bash-completion/completions/apabot
+apabot completions zsh  > ~/.zsh/completions/_apabot      # dossier présent dans $fpath
+apabot completions fish > ~/.config/fish/completions/apabot.fish
+```
 
 ### Mission control (daemon embarqué, tous les OS)
 

@@ -375,6 +375,8 @@ pub struct Ops {
     pub systemd_root_needed: &'static str,
     // ── Installation utilisateur (install/reinstall/uninstall) ──
     pub install_usage: &'static str,
+    pub completions_usage: &'static str,
+    pub refresh_assets_ok: &'static str,
     pub install_unsupported: &'static str,
     pub install_scope_prompt: &'static str,
     pub install_scope_default: &'static str,

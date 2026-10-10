@@ -13,8 +13,10 @@
 //! apabot mission-control       → TUI interactif (clavier + commandes)
 //! apabot systemd install|remove → gestion systemd optionnelle (Linux,
 //!                                     avec confirmations, voir systemd.rs)
+//! apabot completions bash|zsh|fish → script d'autocomplétion shell
 //! ```
 
+pub mod completions;
 pub mod config;
 pub mod install;
 pub mod protocol;
@@ -30,7 +32,7 @@ use crate::i18n::{fill, Catalog};
 use crate::paths;
 
 /// Sous-commandes connues du binaire (la première position de argv).
-pub const SUBCOMMANDS: [&str; 15] = [
+pub const SUBCOMMANDS: [&str; 16] = [
     "run",
     "start",
     "stop",
@@ -46,6 +48,7 @@ pub const SUBCOMMANDS: [&str; 15] = [
     "reinstall",
     "uninstall",
     "config",
+    "completions",
 ];
 
 /// Aiguillage du premier argument. `Some(code)` = sous-commande traitée,
@@ -84,6 +87,7 @@ pub async fn dispatch(sub: &str, args: &[String]) -> Option<i32> {
         "systemd" => Some(systemd::cmd_systemd(args, catalog)),
         "install" | "reinstall" | "uninstall" => Some(install::cmd_install(args, catalog).await),
         "config" => Some(config::cmd_config(args, catalog).await),
+        "completions" => Some(completions::cmd_completions(args, catalog)),
         "help" => {
             println!("{}", catalog.ops.usage);
             Some(0)
