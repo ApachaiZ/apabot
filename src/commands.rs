@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use crate::api::Api;
 use crate::config::Config;
+use crate::confirm;
 use crate::embeds::{card, dashboard, Tone};
 use crate::errors::{error_text, ErrorContext, ProviderError};
 use crate::i18n::{fill, Catalog};
@@ -490,8 +491,19 @@ pub async fn handle_error(err: poise::FrameworkError<'_, Data, Error>) {
                 None => (catalog.common.generic_error.title, error.to_string()),
             };
             logger::error(format!("Request failure: {body}"));
-            if let Err(reply_error) = ctx.send(reply(card(title, &body, Tone::Bad, None))).await {
-                logger::error(format!("Could not update Discord response: {reply_error}"));
+            let embed = card(title, &body, Tone::Bad, None);
+            // UNE seule carte du début à la fin : on ÉDITE la réponse
+            // originale (le GIF de chargement disparaît au passage) —
+            // jamais de followup. Repli `ctx.send` si l'original n'existe
+            // plus (interaction jamais différée…).
+            let edit = serenity::EditInteractionResponse::new()
+                .embed(embed.clone())
+                .clear_attachments();
+            if let Err(edit_error) = confirm::edit_original(&ctx, edit).await {
+                logger::warn(format!("Could not edit original response: {edit_error}"));
+                if let Err(reply_error) = ctx.send(reply(embed)).await {
+                    logger::error(format!("Could not update Discord response: {reply_error}"));
+                }
             }
         }
         poise::FrameworkError::CommandPanic { payload, ctx, .. } => {

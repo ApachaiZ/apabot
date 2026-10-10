@@ -12,14 +12,31 @@
 //! conservé — il est défini par la config et ne peut pas être révoqué).
 
 use poise::serenity_prelude as serenity;
-use serenity::UserId;
+use serenity::{CreateEmbed, EditInteractionResponse, UserId};
 
+use crate::assets::{self, Gif};
 use crate::commands::{reply, Context, Error};
 use crate::confirm;
 use crate::embeds::{card, Tone};
 use crate::i18n::fill;
 use crate::logger;
 use crate::members;
+
+/// Édite la RÉPONSE ORIGINALE (la carte « Traitement » déjà posée par
+/// `confirm`) au lieu d'envoyer un followup : UNE seule carte du début à la
+/// fin. `gif` remplace la pièce jointe (loader → succès) ; `None` la retire.
+async fn edit_card(ctx: &Context<'_>, embed: CreateEmbed, gif: Option<&Gif>) -> Result<(), Error> {
+    let edit = match gif {
+        Some(g) if g.attachment.is_some() => EditInteractionResponse::new()
+            .embed(embed.image(g.image_url.as_deref().unwrap_or_default()))
+            .new_attachment(g.attachment.as_ref().unwrap().clone()),
+        _ => EditInteractionResponse::new()
+            .embed(embed)
+            .clear_attachments(),
+    };
+    confirm::edit_original(ctx, edit).await?;
+    Ok(())
+}
 
 /// Pseudo Discord d'un membre, ou `None` s'il n'est plus joignable (a quitté
 /// le serveur, cache incomplet…). L'appelant retombe alors sur l'ID.
@@ -109,7 +126,9 @@ pub async fn add(
     // Re-vérification : le membre doit toujours exister et être humain.
     let still = guild_id.member(ctx.http(), UserId::new(target_id.parse()?)).await;
     if still.map(|m| m.user.bot).unwrap_or(true) {
-        return Err("Selected member no longer eligible".into());
+        let c = catalog.manage.invalid;
+        edit_card(&ctx, card(c.title, c.body, Tone::Bad, None), None).await?;
+        return Ok(());
     }
 
     // Sauvegarde chiffrée + mémoire.
@@ -129,7 +148,8 @@ pub async fn add(
     ));
     let c = catalog.manage.done;
     let body = fill(c.body_add, &[("username", &member_obj.user.name)]);
-    ctx.send(reply(card(c.title, &body, Tone::Good, None))).await?;
+    let gif = assets::gif_image("success");
+    edit_card(&ctx, card(c.title, &body, Tone::Good, None), Some(&gif)).await?;
     Ok(())
 }
 
@@ -197,7 +217,8 @@ pub async fn remove(
     ));
     let c = catalog.manage.done;
     let body = fill(c.body_remove, &[("username", &member_obj.user.name)]);
-    ctx.send(reply(card(c.title, &body, Tone::Good, None))).await?;
+    let gif = assets::gif_image("success");
+    edit_card(&ctx, card(c.title, &body, Tone::Good, None), Some(&gif)).await?;
     Ok(())
 }
 
@@ -284,6 +305,7 @@ pub async fn clear(ctx: Context<'_>) -> Result<(), Error> {
         &[("ownerId", &logger::short_id(ctx.author().id.to_string()))],
     ));
     let c = catalog.manage.clear;
-    ctx.send(reply(card(c.done_title, c.done_body, Tone::Good, None))).await?;
+    let gif = assets::gif_image("success");
+    edit_card(&ctx, card(c.done_title, c.done_body, Tone::Good, None), Some(&gif)).await?;
     Ok(())
 }
