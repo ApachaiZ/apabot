@@ -370,6 +370,7 @@ pub static CATALOG: Catalog = Catalog {
         install_name_invalid: "Invalid instance name (letters, digits, '-', '_' or '.').",
         reinstall_stop_prompt: "The daemon is running — stop it before replacing the binary?",
         reinstall_confirm: "Replace the binary at {bin}? (data is never touched)",
+        reinstall_binary_busy: "The installed binary is still running — stop the bot (apabot stop) and try again.",
         reinstall_ok: "Binary updated ({bin}) — data untouched.",
         uninstall_not_installed: "No installation found — nothing to uninstall (portable mode has nothing to remove).",
         uninstall_confirm_bin: "Remove the binary at {bin} and the install registry?",

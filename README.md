@@ -145,7 +145,7 @@ Identifiants supplémentaires : `OVH_APPLICATION_SECRET` + `OVH_CONSUMER_KEY`
 src/
 ├── main.rs            ← bootstrap : mode installé/portable, dispatch mission control, gateway, signaux
 ├── paths.rs           ← chemins canoniques (.config.d/, logs/, assets/)
-├── assets.rs          ← GIFs de résultat (disque puis octets embarqués)
+├── assets.rs          ← GIFs de résultat (pool disque par état, puis octets embarqués)
 ├── fsutil.rs          ← écriture atomique (tmp+rename) + permissions 0600
 ├── logger.rs          ← double sortie console/fichier, rotation 5 Mo × 5, bannière, passthrough
 ├── config.rs          ← validation de la config (exit 78)
@@ -277,11 +277,18 @@ apabot uninstall --name apabot01        # retire une instance (données : NON pa
 apabot install --dry-run                # plan sans rien écrire
 ```
 
-**Mise à jour des GIFs** : un GIF déjà sur disque n'est JAMAIS écrasé
-(personnalisation préservée). Après un `git pull` + rebuild, force le
-rafraîchissement avec `apabot reinstall --refresh-assets` (ou `--refresh-assets`
-dès l'installation) : le pool de chargement + succès + erreur sont réécrits
-depuis le checkout, ou depuis les octets embarqués sans checkout à côté.
+**Les GIFs des cartes** vivent dans `assets/emojis/` en TROIS dossiers :
+`loading/` (chargements et attentes), `success/` et `error/`. À chaque
+affichage, un GIF est tiré au hasard dans le dossier de l'état. Pour
+personnaliser : ajoute ou retire des `.gif` dans le dossier (disque) sans
+recompiler ; le pool EMBARQUÉ est généré au build depuis le contenu réel
+— retirer un asset entre deux builds ne casse jamais la compilation.
+
+Un GIF déjà sur disque n'est JAMAIS écrasé (personnalisation préservée).
+Après un `git pull` + rebuild, force le rafraîchissement avec
+`apabot reinstall --refresh-assets` (ou `--refresh-assets` dès
+l'installation) : chaque dossier est vidé puis réécrit avec les GIFs par
+défaut — les GIFs retirés du repo disparaissent aussi du pool installé.
 
 **Instances multiples** : `--name` isole COMPLÈTEMENT chaque bot —
 `~/.config/apabot/instances/<nom>/` contient son propre `.config.d/.env`,

@@ -31,6 +31,7 @@
 
 use dialoguer::{Confirm, Input, Select};
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::fsutil;
@@ -505,37 +506,103 @@ async fn install(args: &[String], catalog: &'static Catalog) -> i32 {
     0
 }
 
-/// Matérialise les GIFs de cartes dans `<root>/assets/emojis/` : copiés
-/// depuis le checkout source s'il existe, sinon depuis les octets EMBARQUÉS
+/// Matérialise les pools de GIFs dans
+/// `<root>/assets/emojis/{loading,success,error}/` : copiés depuis le
+/// checkout source s'il existe, sinon depuis les octets EMBARQUÉS
 /// (installation via `cargo install --git`, sans checkout à côté).
 ///
 /// Sans `refresh`, un GIF existant n'est JAMAIS écrasé (personnalisation
-/// utilisateur préservée) ; avec `refresh`, les GIFs par défaut remplacent
-/// ceux du disque — c'est le chemin de mise à jour après un `git pull`.
+/// préservée). Avec `refresh`, la copie se fait D'ABORD, puis seuls les
+/// orphelins (fichiers absents de la source) sont retirés : c'est la seule
+/// façon de RETIRER un GIF du pool sur une installation existante — et ça
+/// survit au cas source == cible (binaire lancé depuis la racine des
+/// données : la source du checkout EST le dossier cible). Les fichiers
+/// plats de l'ancien format (`emojis/<kind>.gif` + variantes) sont retirés
+/// au passage.
 pub fn materialize_gifs(root: &Path, refresh: bool) -> Result<(), std::io::Error> {
-    std::fs::create_dir_all(root.join("assets").join("emojis"))?;
-    let kinds = crate::assets::LOADING_KINDS
-        .iter()
-        .copied()
-        .chain(["success", "error"]);
-    for kind in kinds {
-        let _ = materialize_kind(root, kind, refresh);
-    }
-    Ok(())
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    materialize_from(root, &cwd.join("assets").join("emojis"), refresh)
 }
 
-/// Matérialise UN GIF (voir [`materialize_gifs`] pour la sémantique).
-fn materialize_kind(root: &Path, kind: &str, refresh: bool) -> std::io::Result<()> {
-    let target = root.join("assets").join("emojis").join(format!("{kind}.gif"));
-    if target.exists() && !refresh {
-        return Ok(());
-    }
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let source = cwd.join("assets").join("emojis").join(format!("{kind}.gif"));
-    if source.is_file() {
-        std::fs::copy(&source, &target)?;
-    } else if let Some(bytes) = crate::assets::embedded(kind) {
-        std::fs::write(&target, bytes)?;
+/// Voir [`materialize_gifs`] — `source_emojis` injecté pour les tests
+/// (en particulier source == cible, impossible à simuler via le CWD).
+fn materialize_from(
+    root: &Path,
+    source_emojis: &Path,
+    refresh: bool,
+) -> Result<(), std::io::Error> {
+    let emojis = root.join("assets").join("emojis");
+    std::fs::create_dir_all(&emojis)?;
+    for kind in ["loading", "success", "error"] {
+        let dir = emojis.join(kind);
+        std::fs::create_dir_all(&dir)?;
+        let source_dir = source_emojis.join(kind);
+        // Noms de la SOURCE : la référence du pool à l'issue de l'appel.
+        // (Checkout : les .gif du dossier ; sans checkout : le pool
+        // embarqué généré au build.)
+        let mut source_files: Vec<OsString> = Vec::new();
+        if source_dir.is_dir() {
+            // Checkout source : copie de TOUS les .gif du dossier.
+            if let Ok(entries) = std::fs::read_dir(&source_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().extension().and_then(|x| x.to_str()) != Some("gif") {
+                        continue;
+                    }
+                    let name = entry.file_name();
+                    source_files.push(name.clone());
+                    if source_dir == dir {
+                        continue; // source == cible : rien à copier.
+                    }
+                    let dst = dir.join(&name);
+                    if dst.exists() && !refresh {
+                        continue;
+                    }
+                    let _ = std::fs::copy(source_dir.join(&name), &dst);
+                }
+            }
+        } else {
+            // Pas de checkout : octets embarqués (pool généré au build).
+            for gif in crate::assets::EMBEDDED_GIFS {
+                if gif.kind != kind {
+                    continue;
+                }
+                let name = format!("{}.gif", gif.name);
+                source_files.push(name.clone().into());
+                let dst = dir.join(&name);
+                if dst.exists() && !refresh {
+                    continue;
+                }
+                let _ = std::fs::write(&dst, gif.bytes);
+            }
+        }
+        if refresh {
+            // Orphelins : présents sur disque, absents de la source (GIF
+            // retiré du repo, ancienne variante…) — retirés du pool.
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|x| x.to_str()) != Some("gif") {
+                        continue;
+                    }
+                    if source_files.contains(&entry.file_name()) {
+                        continue;
+                    }
+                    let _ = std::fs::remove_file(path);
+                }
+            }
+            // Ancien format PLAT (`emojis/<kind>.gif` + variantes
+            // `loading1..6.gif`) : plus jamais lu — retiré au refresh.
+            if let Ok(entries) = std::fs::read_dir(&emojis) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_file()
+                        && path.extension().and_then(|x| x.to_str()) == Some("gif")
+                    {
+                        let _ = std::fs::remove_file(path);
+                    }
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -598,12 +665,18 @@ fn install_files(root: &Path, bin: &Path, pointer: bool, refresh_assets: bool, c
 
 /// Arrêt du daemon installé s'il tourne (avec confirmation). `true` = on
 /// peut continuer, `false` = annulé par l'utilisateur.
-async fn stop_daemon_if_running(catalog: &Catalog) -> bool {
-    let Some(st) = crate::ops::state::read() else {
+/// Arrête le daemon supervisé d'une INSTALLATION (`root` = racine de ses
+/// données, pas le CWD portable du binaire de checkout) et attend sa
+/// sortie : un binaire en cours d'exécution ne peut pas être écrasé
+/// (« Text file busy »).
+async fn stop_daemon_if_running(root: &Path, catalog: &Catalog) -> bool {
+    let Some(st) = crate::ops::state::read_at(root) else {
         return true;
     };
     if !crate::ops::state::pid_alive(st.pid) {
-        crate::ops::state::remove();
+        // État obsolète (superviseur mort sans nettoyage) : retiré ici,
+        // à la racine de l'INSTALLATION (pas au CWD portable du binaire).
+        crate::ops::state::remove_at(root);
         return true;
     }
     if !Confirm::new()
@@ -615,7 +688,30 @@ async fn stop_daemon_if_running(catalog: &Catalog) -> bool {
         return false;
     }
     let _ = crate::ops::protocol::request(&st, "stop").await;
+    // Le superviseur arrête le bot puis s'éteint (force-kill après un délai
+    // de grâce) : on attend qu'il ait réellement quitté.
+    for _ in 0..40 {
+        if !crate::ops::state::pid_alive(st.pid) {
+            return true;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    // Toujours vivant : on continue quand même — la copie retentera sur
+    // ETXTBSY un peu plus longtemps avant d'abandonner proprement.
     true
+}
+
+/// `ETXTBSY` : le binaire cible est en cours d'exécution (Linux). Sous
+/// Windows, écraser un exe en cours d'exécution échoue aussi : on traite
+/// `PermissionDenied` de la même façon.
+#[cfg(unix)]
+fn is_text_file_busy(e: &std::io::Error) -> bool {
+    e.raw_os_error() == Some(libc::ETXTBSY)
+}
+
+#[cfg(not(unix))]
+fn is_text_file_busy(e: &std::io::Error) -> bool {
+    e.kind() == std::io::ErrorKind::PermissionDenied
 }
 
 async fn reinstall(args: &[String], catalog: &'static Catalog) -> i32 {
@@ -647,7 +743,7 @@ async fn reinstall(args: &[String], catalog: &'static Catalog) -> i32 {
         return 0;
     }
 
-    if !stop_daemon_if_running(catalog).await {
+    if !stop_daemon_if_running(&reg.root, catalog).await {
         println!("{}", catalog.ops.systemd_aborted);
         return 0;
     }
@@ -668,9 +764,23 @@ async fn reinstall(args: &[String], catalog: &'static Catalog) -> i32 {
             return 1;
         }
     };
-    if let Err(e) = std::fs::copy(&exe, &reg.bin) {
-        eprintln!("{}", fill(catalog.ops.install_failed, &[("error", &e.to_string())]));
-        return 1;
+    // Copie avec retries sur ETXTBSY : l'arrêt du daemon est ASYNCHRONE et
+    // le binaire reste verrouillé quelques instants après le signal.
+    for attempt in 0..30 {
+        match std::fs::copy(&exe, &reg.bin) {
+            Ok(_) => break,
+            Err(e) if is_text_file_busy(&e) => {
+                if attempt == 29 {
+                    eprintln!("{}", catalog.ops.reinstall_binary_busy);
+                    return 1;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            Err(e) => {
+                eprintln!("{}", fill(catalog.ops.install_failed, &[("error", &e.to_string())]));
+                return 1;
+            }
+        }
     }
     #[cfg(unix)]
     {
@@ -729,7 +839,7 @@ async fn uninstall(args: &[String], catalog: &'static Catalog) -> i32 {
     }
 
     // ── 1. Daemon en cours ? Arrêt demandé ──
-    if !stop_daemon_if_running(catalog).await {
+    if !stop_daemon_if_running(&reg.root, catalog).await {
         println!("{}", catalog.ops.systemd_aborted);
         return 0;
     }
@@ -847,20 +957,51 @@ mod tests {
 
     #[test]
     fn refresh_assets_overwrites_only_when_asked() {
-        // Sans `refresh`, un GIF existant (personnalisation) est préservé ;
-        // avec `refresh`, le GIF par défaut du checkout/embarqué remplace.
+        // Sans `refresh`, une personnalisation est préservée et les défauts
+        // manquants sont matérialisés ; avec `refresh`, le pool est vidé et
+        // re-rempli des défauts seuls (les orphelins disparaissent).
         let dir = std::env::temp_dir().join(format!("apabot-gifs-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let target = dir.join("assets").join("emojis").join("error.gif");
-        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
-        std::fs::write(&target, b"custom").unwrap();
+        let error_dir = dir.join("assets").join("emojis").join("error");
+        std::fs::create_dir_all(&error_dir).unwrap();
+        std::fs::write(error_dir.join("custom.gif"), b"custom").unwrap();
 
-        materialize_kind(&dir, "error", false).unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"custom");
+        materialize_gifs(&dir, false).unwrap();
+        assert_eq!(std::fs::read(error_dir.join("custom.gif")).unwrap(), b"custom");
+        let fresh = std::fs::read(error_dir.join("error.gif")).unwrap();
+        assert!(&fresh[..6] == b"GIF89a", "le GIF par défaut n'a pas été matérialisé");
 
-        materialize_kind(&dir, "error", true).unwrap();
-        let fresh = std::fs::read(&target).unwrap();
-        assert!(&fresh[..6] == b"GIF89a", "le GIF par défaut n'a pas remplacé la personnalisation");
+        materialize_gifs(&dir, true).unwrap();
+        assert!(
+            !error_dir.join("custom.gif").exists(),
+            "l'orphelin aurait dû être retiré du pool"
+        );
+        let fresh = std::fs::read(error_dir.join("error.gif")).unwrap();
+        assert!(&fresh[..6] == b"GIF89a");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refresh_from_data_root_keeps_the_pool() {
+        // Binaire lancé depuis la racine des DONNÉES (CWD == root) : la
+        // source du checkout EST le dossier cible. Un refresh ne doit
+        // RIEN retirer — le pool sert lui-même de source.
+        let dir = std::env::temp_dir().join(format!("apabot-gifs-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pool = dir.join("assets").join("emojis").join("loading");
+        std::fs::create_dir_all(&pool).unwrap();
+        std::fs::write(pool.join("loading.gif"), b"GIF89a").unwrap();
+        std::fs::write(pool.join("custom.gif"), b"GIF89a").unwrap();
+
+        materialize_from(&dir, &dir.join("assets").join("emojis"), true).unwrap();
+        assert!(pool.join("loading.gif").exists(), "défaut perdu au refresh");
+        assert!(pool.join("custom.gif").exists(), "personnalisation perdue au refresh");
+        assert_eq!(
+            std::fs::read(pool.join("loading.gif")).unwrap(),
+            b"GIF89a",
+            "contenu altéré au refresh"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

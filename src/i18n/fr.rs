@@ -366,6 +366,7 @@ pub static CATALOG: Catalog = Catalog {
         install_name_invalid: "Nom d'instance invalide (lettres, chiffres, '-', '_' ou '.').",
         reinstall_stop_prompt: "Le daemon tourne — l'arrêter avant de remplacer le binaire ?",
         reinstall_confirm: "Remplacer le binaire de {bin} ? (les données ne sont jamais touchées)",
+        reinstall_binary_busy: "Le binaire installé est toujours en cours d'exécution — arrêtez le bot (apabot stop) puis réessayez.",
         reinstall_ok: "Binaire mis à jour ({bin}) — données intactes.",
         uninstall_not_installed: "Aucune installation trouvée — rien à désinstaller (le mode portable n'a rien à retirer).",
         uninstall_confirm_bin: "Supprimer le binaire de {bin} et le registre d'installation ?",

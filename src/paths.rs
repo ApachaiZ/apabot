@@ -72,7 +72,9 @@ pub fn daemon_state_file() -> PathBuf {
     config_dir().join("daemon.json")
 }
 
-/// GIF animé d'un état d'action power (`loading` + variantes, `success`, `error`).
-pub fn gif_path(kind: &str) -> PathBuf {
-    root().join("assets").join("emojis").join(format!("{kind}.gif"))
+/// Dossier des GIFs animés d'un état d'action power (`loading`, `success`,
+/// `error`) : chaque dossier contient un pool de GIFs, un est tiré au
+/// hasard à chaque affichage.
+pub fn gif_dir(kind: &str) -> PathBuf {
+    root().join("assets").join("emojis").join(kind)
 }

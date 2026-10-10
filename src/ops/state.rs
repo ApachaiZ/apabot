@@ -23,8 +23,22 @@ pub struct DaemonState {
     pub started_at: String,
 }
 
+/// Supprime l'état du superviseur d'une racine de données PRÉCISE (voir
+/// [`read_at`]).
+pub fn remove_at(root: &std::path::Path) {
+    let _ = std::fs::remove_file(root.join(".config.d").join("daemon.json"));
+}
+
 pub fn read() -> Option<DaemonState> {
-    let raw = std::fs::read_to_string(paths::daemon_state_file()).ok()?;
+    read_at(&paths::root())
+}
+
+/// Lit l'état du superviseur d'une racine de données PRÉCISE — celle de
+/// l'installation visée par `reinstall`/`uninstall`, pas forcément celle du
+/// répertoire courant (un binaire de checkout est en mode portable : son
+/// CWD n'a rien à voir avec l'installation qu'il met à jour).
+pub fn read_at(root: &std::path::Path) -> Option<DaemonState> {
+    let raw = std::fs::read_to_string(root.join(".config.d").join("daemon.json")).ok()?;
     serde_json::from_str(&raw).ok()
 }
 

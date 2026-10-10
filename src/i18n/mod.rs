@@ -395,6 +395,7 @@ pub struct Ops {
     pub install_name_invalid: &'static str,
     pub reinstall_stop_prompt: &'static str,
     pub reinstall_confirm: &'static str,
+    pub reinstall_binary_busy: &'static str,
     pub reinstall_ok: &'static str,
     pub uninstall_not_installed: &'static str,
     pub uninstall_confirm_bin: &'static str,
